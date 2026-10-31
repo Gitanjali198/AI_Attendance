@@ -1,0 +1,29 @@
+services:
+  # =========================================================================
+  # 1. Main Service: Streamlit Web Portal (Executive Dashboard & AI Camera)
+  # =========================================================================
+  - type: web
+    name: ai-attendance-portal
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: streamlit run frontend/dashboard.py --server.port $PORT --server.address 0.0.0.0
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+
+  # =========================================================================
+  # 2. Optional Service: FastAPI REST Backend Server (Swagger /docs)
+  # (Uncomment this block if you also wish to deploy the standalone REST API)
+  # =========================================================================
+  # - type: web
+  #   name: ai-attendance-api
+  #   runtime: python
+  #   plan: free
+  #   region: oregon
+  #   buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+  #   startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+  #   envVars:
+  #     - key: PYTHON_VERSION
+  #       value: 3.11.9

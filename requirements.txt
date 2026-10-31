@@ -1,0 +1,15 @@
+# Core Computer Vision & AI (Headless version prevents libGL.so.1 errors on Linux/Render)
+opencv-contrib-python-headless>=4.8.0
+numpy>=1.24.0
+Pillow>=9.5.0
+
+# Web Dashboard & Visualizations
+streamlit>=1.30.0
+plotly>=5.18.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Backend REST API
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0.0

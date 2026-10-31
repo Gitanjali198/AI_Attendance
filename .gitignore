@@ -1,0 +1,12 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.DS_Store
+
+# Generated report exports (keep reports directory via .gitkeep)
+reports/*.xlsx
+reports/*.csv
+!reports/.gitkeep
