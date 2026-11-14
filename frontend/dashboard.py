@@ -50,7 +50,8 @@ from backend.config import (
     DATASET_DIR, DEFAULT_CONFIDENCE_THRESHOLD,
     WORK_START_TIME, CHECKIN_GRACE_TIME, WORK_END_TIME, CHECKOUT_GRACE_TIME,
     DAILY_WORK_HOURS, DEFAULT_HOURLY_RATE, DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR, CURRENCY_SYMBOL,
-    DEFAULT_CAMERA_INDEX, FACE_IMAGE_SIZE
+    DEFAULT_CAMERA_INDEX, FACE_IMAGE_SIZE,
+    get_now, get_today, get_current_time_str, get_current_date_str, DEFAULT_TIMEZONE_STR
 )
 from backend.database import get_connection, init_db, calculate_duration
 from backend.employee import (
@@ -58,7 +59,7 @@ from backend.employee import (
     delete_employee, update_employee, get_departments
 )
 from backend.attendance import (
-    mark_attendance, record_manual_attendance,
+    mark_attendance, record_manual_attendance, update_attendance_record,
     delete_attendance_record, get_today_summary
 )
 from backend.payroll import (
@@ -187,9 +188,10 @@ with st.sidebar:
     st.write(f"📸 **Detector:** YuNet 5-Point Landmark Ready")
 
     st.divider()
-    today_str = datetime.now().strftime("%A, %d %B %Y")
-    current_time_str = datetime.now().strftime("%H:%M:%S")
-    st.caption(f"📅 {today_str}\n🕒 System Time: {current_time_str}")
+    now_dt = get_now()
+    today_str = now_dt.strftime("%A, %d %B %Y")
+    current_time_str = now_dt.strftime("%I:%M:%S %p")
+    st.caption(f"📅 **{today_str}**\n\n🕒 **Local Time ({DEFAULT_TIMEZONE_STR}):** `{current_time_str}`")
 
 # ----------------- PAGE 1: EXECUTIVE DASHBOARD -----------------
 if menu == "📊 Executive Dashboard":
@@ -205,7 +207,7 @@ if menu == "📊 Executive Dashboard":
             index=0
         )
 
-    today = date.today()
+    today = get_today()
     if date_preset == "Today":
         start_date = today
         end_date = today
@@ -766,10 +768,10 @@ elif menu == "📋 Attendance Logs":
                 with m_col1:
                     emp_choices = {f"{e['employee_id']} - {e['employee_name']}": e['employee_id'] for e in emps}
                     m_emp = st.selectbox("Employee", list(emp_choices.keys()))
-                    m_date = st.date_input("Date", date.today())
+                    m_date = st.date_input("Date", get_today())
                     m_status = st.selectbox("Status", ["Present", "Half Day", "On Leave", "Excused"])
                 with m_col2:
-                    m_checkin = st.text_input("Check-In Time (HH:MM:SS)", value="09:00:00")
+                    m_checkin = st.text_input("Check-In Time (HH:MM:SS)", value=get_current_time_str())
                     m_checkout = st.text_input("Check-Out Time (HH:MM:SS)", value="17:00:00")
                     m_notes = st.text_input("Reason / Notes", value="Manual HR Entry")
 
@@ -791,19 +793,65 @@ elif menu == "📋 Attendance Logs":
         else:
             st.warning("Please register employees first.")
 
-    # Tab 3: Delete Record
+    # Tab 3: Manage & Edit Records
     with log_tabs[2]:
-        st.write("### 🗑️ Delete Specific Attendance Record")
+        st.write("### 🛠️ Manage, Fix & Adjust Attendance Records")
+        st.caption("Fix incorrect timestamps (e.g., UTC clock differences) or delete unwanted records.")
+
         conn = get_connection()
-        records_df = pd.read_sql_query("SELECT id, employee_id, employee_name, date, check_in, check_out FROM attendance ORDER BY id DESC LIMIT 50", conn)
+        records_df = pd.read_sql_query("SELECT id, employee_id, employee_name, date, check_in, check_out, status, notes FROM attendance ORDER BY id DESC LIMIT 50", conn)
         conn.close()
 
         if not records_df.empty:
-            del_id = st.number_input("Enter Record ID to Delete", min_value=1, step=1)
-            if st.button("Delete Record", type="secondary"):
-                delete_attendance_record(del_id)
-                st.success(f"Record #{del_id} deleted successfully.")
-                st.rerun()
+            edit_tab, del_tab = st.tabs(["✏️ Edit / Fix Record Timestamps", "🗑️ Delete Record"])
+
+            with edit_tab:
+                record_options = {
+                    f"#{r['id']} - {r['employee_name']} (ID: {r['employee_id']}) | Date: {r['date']} | In: {r['check_in']} | Out: {r['check_out']}": r['id']
+                    for _, r in records_df.iterrows()
+                }
+                selected_rec_key = st.selectbox("Select Record to Edit", list(record_options.keys()))
+                sel_rec_id = record_options[selected_rec_key]
+                sel_row = records_df[records_df["id"] == sel_rec_id].iloc[0]
+
+                with st.form("edit_record_form"):
+                    e_col1, e_col2 = st.columns(2)
+                    with e_col1:
+                        new_date = st.text_input("Date (YYYY-MM-DD)", value=str(sel_row["date"]))
+                        new_checkin = st.text_input("Check-In Time (HH:MM:SS)", value=str(sel_row["check_in"]))
+                        status_choices = ["Present", "Half Day", "On Leave", "Excused"]
+                        curr_status_idx = status_choices.index(sel_row["status"]) if sel_row["status"] in status_choices else 0
+                        new_status = st.selectbox("Day Status", status_choices, index=curr_status_idx)
+                    with e_col2:
+                        new_checkout = st.text_input("Check-Out Time (HH:MM:SS)", value=str(sel_row["check_out"]))
+                        new_notes = st.text_input("Audit Notes", value=str(sel_row["notes"]))
+
+                    st.caption("💡 Quick tip: To set real-time IST check-in, you can enter the current time (e.g., `10:45:00`).")
+                    save_edit = st.form_submit_button("💾 Save Updated Record", type="primary")
+
+                    if save_edit:
+                        u_ok, u_msg = update_attendance_record(
+                            sel_rec_id,
+                            check_in=new_checkin.strip(),
+                            check_out=new_checkout.strip(),
+                            date_str=new_date.strip(),
+                            status=new_status,
+                            notes=new_notes.strip()
+                        )
+                        if u_ok:
+                            st.success(u_msg)
+                            st.rerun()
+                        else:
+                            st.error(u_msg)
+
+            with del_tab:
+                del_id = st.number_input("Enter Record ID to Delete", min_value=1, step=1, value=int(records_df.iloc[0]["id"]))
+                if st.button("Delete Record", type="secondary"):
+                    delete_attendance_record(del_id)
+                    st.success(f"Record #{del_id} deleted successfully.")
+                    st.rerun()
+
+            st.divider()
             st.caption("Recent records for reference:")
             st.dataframe(records_df, use_container_width=True, hide_index=True)
         else:
@@ -836,7 +884,7 @@ elif menu == "💼 Payroll & Compensation":
         "July", "August", "September", "October", "November", "December",
         "Custom Date Range"
     ]
-    today_d = date.today()
+    today_d = get_today()
     default_month_idx = today_d.month - 1
 
     col_p1, col_p2, col_p3 = st.columns([2.2, 1.2, 2.6])
@@ -1024,7 +1072,7 @@ elif menu == "💼 Payroll & Compensation":
             chosen_pay = emp_dict_map[selected_slip_key]
 
             # Generate Payslip Document
-            issue_date = datetime.now().strftime("%d %B %Y")
+            issue_date = get_now().strftime("%d %B %Y")
             slip_html = f"""
             <div style="background: #ffffff; color: #111111; padding: 30px; border-radius: 12px; border: 1px solid #e0e0e0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 800px; margin: 10px auto; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
                 <!-- Header -->
@@ -1279,7 +1327,7 @@ elif menu == "⚙️ System Settings":
             st.download_button(
                 label="📥 Download Database Backup (.db)",
                 data=db_bytes,
-                file_name=f"attendance_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+                file_name=f"attendance_backup_{get_now().strftime('%Y%m%d_%H%M%S')}.db",
                 mime="application/x-sqlite3"
             )
 

@@ -12,6 +12,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
+      - key: TIMEZONE
+        value: Asia/Kolkata
+      - key: TZ
+        value: Asia/Kolkata
 
   # =========================================================================
   # 2. Optional Service: FastAPI REST Backend Server (Swagger /docs)

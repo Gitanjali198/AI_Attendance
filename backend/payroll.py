@@ -16,7 +16,8 @@ if str(BASE_DIR) not in sys.path:
 from backend.config import (
     WORK_START_TIME, CHECKIN_GRACE_TIME, WORK_END_TIME,
     CHECKOUT_GRACE_TIME, DAILY_WORK_HOURS, DEFAULT_HOURLY_RATE,
-    DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR, CURRENCY_SYMBOL
+    DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR, CURRENCY_SYMBOL,
+    get_today, get_now
 )
 from backend.database import (
     get_connection, duration_str_to_hours, calculate_hours_between, calculate_duration
@@ -28,7 +29,7 @@ def parse_date_range(start_date=None, end_date=None, month=None, year=None):
     Parses start and end dates. If month/year provided, returns month range.
     Defaults to current month if nothing provided.
     """
-    today = date.today()
+    today = get_today()
     if month and year:
         # Month range
         start = date(year, month, 1)
@@ -89,7 +90,7 @@ def calculate_employee_payroll(employee_id, start_date=None, end_date=None, mont
         att_by_date[r["date"]] = r
 
     # Iterate through all dates in range
-    today = date.today()
+    today = get_today()
     curr_date = start
     daily_records = []
     full_days = 0
@@ -267,7 +268,7 @@ def save_finalized_payroll(payroll_data):
     """
     conn = get_connection()
     cursor = conn.cursor()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
 
     saved_count = 0
     for record in payroll_data.get("employee_payrolls", []):

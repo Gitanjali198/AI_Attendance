@@ -37,6 +37,34 @@ EMBEDDINGS_PATH = TRAINER_DIR / "face_embeddings.json"
 for directory in [DATABASE_DIR, HAARCASCADE_DIR, DATASET_DIR, TRAINER_DIR, REPORTS_DIR, MODELS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
+# ----------------- TIMEZONE & REAL-TIME CLOCK CONFIGURATION -----------------
+# Default timezone set to Indian Standard Time (IST, UTC+05:30)
+# Can be overridden via environment variables: TIMEZONE or TZ
+from zoneinfo import ZoneInfo
+from datetime import datetime, date
+
+DEFAULT_TIMEZONE_STR = os.getenv("TIMEZONE", os.getenv("TZ", "Asia/Kolkata"))
+try:
+    LOCAL_TZ = ZoneInfo(DEFAULT_TIMEZONE_STR)
+except Exception:
+    LOCAL_TZ = ZoneInfo("Asia/Kolkata")
+
+def get_now() -> datetime:
+    """Returns current timezone-aware datetime in configured local timezone."""
+    return datetime.now(LOCAL_TZ)
+
+def get_today() -> date:
+    """Returns current timezone-aware date in configured local timezone."""
+    return get_now().date()
+
+def get_current_time_str() -> str:
+    """Returns current time string HH:MM:SS in configured local timezone."""
+    return get_now().strftime("%H:%M:%S")
+
+def get_current_date_str() -> str:
+    """Returns current date string YYYY-MM-DD in configured local timezone."""
+    return get_now().strftime("%Y-%m-%d")
+
 # Deep Face AI Settings (Angle & Pose Invariant SFace + YuNet)
 SFACE_MATCH_THRESHOLD = 0.380         # OpenCV recommended cosine similarity threshold (>= 0.380 is genuine match)
 YUNET_SCORE_THRESHOLD = 0.60          # Min confidence score for YuNet face detection

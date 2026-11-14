@@ -13,7 +13,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from backend.database import get_connection
-from backend.config import DATASET_DIR, DEFAULT_DAILY_SALARY, DEFAULT_HOURLY_RATE, DAILY_WORK_HOURS
+from backend.config import DATASET_DIR, DEFAULT_DAILY_SALARY, DEFAULT_HOURLY_RATE, DAILY_WORK_HOURS, get_now
 
 def add_employee(employee_id, employee_name, department, email="", daily_salary=None, hourly_rate=DEFAULT_HOURLY_RATE):
     """
@@ -46,7 +46,7 @@ def add_employee(employee_id, employee_name, department, email="", daily_salary=
             conn.close()
             return False, f"Employee with ID '{employee_id}' already exists."
 
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now_str = get_now().strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             INSERT INTO employees (employee_id, employee_name, department, email, created_at, daily_salary, hourly_rate)
             VALUES (?, ?, ?, ?, ?, ?, ?)

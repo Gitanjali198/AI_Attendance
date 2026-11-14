@@ -8,6 +8,7 @@ streamlit>=1.30.0
 plotly>=5.18.0
 pandas>=2.0.0
 openpyxl>=3.1.0
+tzdata>=2024.1
 
 # Backend REST API
 fastapi>=0.100.0

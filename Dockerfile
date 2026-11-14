@@ -4,13 +4,16 @@ FROM python:3.11-slim
 # Prevent Python from writing .pyc files & enable unbuffered stdout
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8501
+    PORT=8501 \
+    TZ="Asia/Kolkata" \
+    TIMEZONE="Asia/Kolkata"
 
 WORKDIR /app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    tzdata \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

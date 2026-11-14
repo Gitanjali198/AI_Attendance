@@ -15,7 +15,8 @@ if str(BASE_DIR) not in sys.path:
 from backend.database import get_connection, calculate_duration, calculate_hours_between, duration_str_to_hours
 from backend.config import (
     WORK_START_TIME, CHECKIN_GRACE_TIME, WORK_END_TIME,
-    CHECKOUT_GRACE_TIME, DEFAULT_HOURLY_RATE, DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR
+    CHECKOUT_GRACE_TIME, DEFAULT_HOURLY_RATE, DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR,
+    get_current_time_str, get_current_date_str, get_now, get_today
 )
 
 def parse_employee_identifier(employee_identifier):
@@ -60,8 +61,8 @@ def mark_attendance(employee_identifier, mode="checkin", custom_time=None, notes
     """
     emp_id, emp_name, department, hourly_rate, daily_salary = parse_employee_identifier(employee_identifier)
 
-    today = date.today().strftime("%Y-%m-%d")
-    current_time = custom_time or datetime.now().strftime("%H:%M:%S")
+    today = get_current_date_str()
+    current_time = custom_time or get_current_time_str()
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -257,6 +258,56 @@ def record_manual_attendance(employee_id, date_str, check_in, check_out, status=
     conn.close()
     return True, f"Attendance record saved for {emp_name} on {date_str} ({status} - {hours_worked:.2f} hrs - Rs {salary_earned:.2f})."
 
+def update_attendance_record(record_id, check_in=None, check_out=None, date_str=None, status=None, notes=None):
+    """
+    Updates an existing attendance entry's timestamps, duration, status, and salary.
+    Allows HR to fix or adjust check-in/out timestamps directly.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM attendance WHERE id = ?", (record_id,))
+    rec = cursor.fetchone()
+    if not rec:
+        conn.close()
+        return False, f"Attendance record #{record_id} not found."
+
+    clean_in = check_in.strip() if check_in is not None else rec["check_in"]
+    clean_out = check_out.strip() if check_out is not None else rec["check_out"]
+    clean_date = date_str.strip() if date_str is not None else rec["date"]
+
+    duration = calculate_duration(clean_in, clean_out)
+    hours = calculate_hours_between(clean_in, clean_out)
+
+    clean_status = status
+    if not clean_status:
+        if clean_in and clean_in[:8] <= CHECKIN_GRACE_TIME:
+            clean_status = "Present"
+        else:
+            clean_status = "Half Day"
+
+    clean_notes = notes
+    if clean_notes is None:
+        if clean_in and clean_in[:8] <= CHECKIN_GRACE_TIME:
+            clean_notes = "On-Time Check-In (Shift 9:00 AM - 5:00 PM)"
+        else:
+            clean_notes = f"Late Check-In (After {CHECKIN_GRACE_TIME[:5]} AM - Half Day tag)"
+
+    # Get employee hourly rate
+    cursor.execute("SELECT hourly_rate FROM employees WHERE employee_id = ?", (rec["employee_id"],))
+    emp_row = cursor.fetchone()
+    rate = emp_row["hourly_rate"] if emp_row and emp_row["hourly_rate"] else DEFAULT_HOURLY_RATE
+    salary_earned = round(hours * rate, 2)
+
+    cursor.execute("""
+        UPDATE attendance
+        SET date = ?, check_in = ?, check_out = ?, duration = ?, status = ?, notes = ?, salary_earned = ?
+        WHERE id = ?
+    """, (clean_date, clean_in, clean_out, duration, clean_status, clean_notes, salary_earned, record_id))
+
+    conn.commit()
+    conn.close()
+    return True, f"Record #{record_id} successfully updated: Date {clean_date}, Check-In {clean_in}, Status {clean_status}."
+
 def delete_attendance_record(record_id):
     """Deletes an attendance entry by its ID."""
     conn = get_connection()
@@ -270,7 +321,7 @@ def get_today_summary():
     """
     Returns comprehensive KPI metrics for today including payroll stats.
     """
-    today = date.today().strftime("%Y-%m-%d")
+    today = get_current_date_str()
     conn = get_connection()
     cursor = conn.cursor()
 
