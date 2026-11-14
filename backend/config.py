@@ -27,9 +27,20 @@ LABELS_PATH = TRAINER_DIR / "labels.json"
 # Reports Output Directory
 REPORTS_DIR = Path(os.getenv("REPORTS_DIR", BASE_DIR / "reports"))
 
+# Deep Learning Models Directory (YuNet + SFace)
+MODELS_DIR = Path(os.getenv("MODELS_DIR", BASE_DIR / "models"))
+YUNET_MODEL_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
+SFACE_MODEL_PATH = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
+EMBEDDINGS_PATH = TRAINER_DIR / "face_embeddings.json"
+
 # Ensure all essential directories exist
-for directory in [DATABASE_DIR, HAARCASCADE_DIR, DATASET_DIR, TRAINER_DIR, REPORTS_DIR]:
+for directory in [DATABASE_DIR, HAARCASCADE_DIR, DATASET_DIR, TRAINER_DIR, REPORTS_DIR, MODELS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+
+# Deep Face AI Settings (Angle & Pose Invariant SFace + YuNet)
+SFACE_MATCH_THRESHOLD = 0.380         # OpenCV recommended cosine similarity threshold (>= 0.380 is genuine match)
+YUNET_SCORE_THRESHOLD = 0.60          # Min confidence score for YuNet face detection
+YUNET_NMS_THRESHOLD = 0.30            # YuNet Non-maximum suppression threshold
 
 # Face Recognition Settings
 DEFAULT_CONFIDENCE_THRESHOLD = 45  # Max LBPH distance allowed (distance <= 45 is a genuine match)

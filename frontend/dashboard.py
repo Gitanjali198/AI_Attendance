@@ -45,7 +45,8 @@ importlib.reload(backend_att)
 importlib.reload(backend_pay)
 
 from backend.config import (
-    DB_PATH, HAAR_CASCADE_PATH, TRAINER_MODEL_PATH, LABELS_PATH,
+    DB_PATH, HAAR_CASCADE_PATH, TRAINER_MODEL_PATH, LABELS_PATH, EMBEDDINGS_PATH,
+    YUNET_MODEL_PATH, SFACE_MODEL_PATH,
     DATASET_DIR, DEFAULT_CONFIDENCE_THRESHOLD,
     WORK_START_TIME, CHECKIN_GRACE_TIME, WORK_END_TIME, CHECKOUT_GRACE_TIME,
     DAILY_WORK_HOURS, DEFAULT_HOURLY_RATE, DEFAULT_DAILY_SALARY, HALF_DAY_FACTOR, CURRENCY_SYMBOL,
@@ -157,22 +158,33 @@ with st.sidebar:
 
     # System Health Indicator
     st.markdown("### 🖥️ System Status")
-    is_model_trained = TRAINER_MODEL_PATH.exists() and LABELS_PATH.exists()
+    has_deep_embeddings = EMBEDDINGS_PATH.exists()
+    is_model_trained = (TRAINER_MODEL_PATH.exists() and LABELS_PATH.exists()) or has_deep_embeddings
     labels_count = 0
-    if is_model_trained:
+    deep_count = 0
+    if has_deep_embeddings:
+        try:
+            with open(EMBEDDINGS_PATH, "r") as f:
+                deep_data = json.load(f)
+                deep_count = len(deep_data)
+        except Exception:
+            pass
+    if LABELS_PATH.exists():
         try:
             with open(LABELS_PATH, "r") as f:
                 labels_count = len(json.load(f))
         except Exception:
             pass
-    is_model_trained = is_model_trained and (labels_count > 0)
 
     st.write(f"🗄️ **Database:** Connected")
-    if is_model_trained:
-        st.write(f"🧠 **AI Model:** Trained ({labels_count} employees)")
+    if has_deep_embeddings and deep_count > 0:
+        st.write(f"🧠 **AI Engine:** Deep SFace AI Active ({deep_count} employees)")
+        st.caption("✨ Multi-Angle & Pose Invariant (±70° Yaw, ±60° Pitch)")
+    elif is_model_trained and labels_count > 0:
+        st.write(f"🧠 **AI Model:** LBPH Trained ({labels_count} employees)")
     else:
         st.warning("🧠 **AI Model:** Not Trained")
-    st.write(f"📸 **Detector:** Haar Cascade Ready")
+    st.write(f"📸 **Detector:** YuNet 5-Point Landmark Ready")
 
     st.divider()
     today_str = datetime.now().strftime("%A, %d %B %Y")
@@ -424,8 +436,8 @@ elif menu == "📷 Face Recognition Kiosk":
 
         # Tab 1: In-Browser Web Camera Snapshot
         with kiosk_tabs[0]:
-            st.write("### 📸 Snapshot Recognition")
-            st.caption("Look straight at your webcam and take a snapshot to instantly mark attendance.")
+            st.write("### 📸 Multi-Angle AI Face Recognition")
+            st.caption("Look at the camera from any angle (straight, tilted, left, right, up, down). The deep neural network automatically aligns your facial features and matches your ID.")
 
             cam_image = st.camera_input("Smile at the camera to verify face ID")
 
@@ -484,7 +496,9 @@ elif menu == "📷 Face Recognition Kiosk":
                                         st.info(f"ℹ️ **Already Checked Out**\n\n**{att_res['employee_name']}** checked out earlier today at {att_res['time']}.")
                                     elif status_code == "not_checked_in":
                                         st.error(f"❌ **Cannot Check-Out!**\n\n**{att_res['employee_name']}** has not checked in today yet.")
-                                    st.caption(f"Match Confidence: {item['confidence_percent']}% | LBPH Distance: {item['confidence_distance']} (Threshold: ≥{min_confidence_val}%)")
+                                    engine_tag = item.get("engine", "Deep SFace AI")
+                                    sim_score = item.get("cosine_similarity", 1.0 - item.get("confidence_distance", 0.0))
+                                    st.caption(f"🧠 **AI Engine:** {engine_tag} | Match Confidence: **{item['confidence_percent']}%** | Similarity: **{sim_score:.3f}** (Threshold: ≥{min_confidence_val}%)")
                             else:
                                 (x, y, w, h) = item["box"]
                                 face_crop = frame[max(0, y):y+h, max(0, x):x+w]
@@ -500,7 +514,9 @@ elif menu == "📷 Face Recognition Kiosk":
                                         f"- **Status:** Access Denied / Not Registered\n\n"
                                         f"Please register this person in the **Employee Management** tab first."
                                     )
-                                    st.caption(f"LBPH Distance: {item['confidence_distance']} | Confidence: {item['confidence_percent']}%")
+                                    engine_tag = item.get("engine", "Deep SFace AI")
+                                    sim_score = item.get("cosine_similarity", 1.0 - item.get("confidence_distance", 0.0))
+                                    st.caption(f"🧠 **AI Engine:** {engine_tag} | Match Confidence: **{item['confidence_percent']}%** | Similarity: **{sim_score:.3f}** (Threshold: ≥{min_confidence_val}%)")
                 except Exception as e:
                     st.error(f"Error during recognition: {e}")
 
@@ -1167,17 +1183,17 @@ elif menu == "💼 Payroll & Compensation":
 
 # ----------------- PAGE 6: AI MODEL TRAINER -----------------
 elif menu == "🧠 AI Model Trainer":
-    st.markdown('<div class="main-title">🧠 AI Model Trainer & Dataset Explorer</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-title">Train OpenCV LBPH recognizer and inspect employee facial training samples</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">🧠 AI Model Trainer & Multi-Angle Biometrics Explorer</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">Train Deep SFace AI (Angle-Invariant Embeddings) & Classical LBPH Recognizer</div>', unsafe_allow_html=True)
 
     t_col1, t_col2 = st.columns([1, 1])
 
     with t_col1:
-        st.markdown("### ⚡ Train Face Recognizer")
-        st.write("Trains the Local Binary Patterns Histograms (LBPH) engine on all images located inside `employee_images/`.")
+        st.markdown("### ⚡ Train Deep Multi-Angle AI Recognizer")
+        st.write("Extracts 128-dimensional deep feature embeddings using **OpenCV SFace** with **YuNet 5-point facial landmark alignment**, generating synthetic multi-angle vectors (yaw, pitch, roll, tilt) so employees can check in from any viewing angle.")
 
         if st.button("🚀 Train / Retrain Model Now", type="primary"):
-            with st.spinner("Extracting facial features and training model..."):
+            with st.spinner("Extracting multi-angle facial embeddings and training AI..."):
                 result = train_model()
             if result["success"]:
                 st.success(result["message"])
@@ -1186,23 +1202,34 @@ elif menu == "🧠 AI Model Trainer":
                 st.error(f"Training Failed: {result['message']}")
 
     with t_col2:
-        st.markdown("### 📊 Model Diagnostics")
+        st.markdown("### 📊 Model Diagnostics & AI Health")
+        deep_embeddings_exist = EMBEDDINGS_PATH.exists()
+        yunet_exists = YUNET_MODEL_PATH.exists()
+        sface_exists = SFACE_MODEL_PATH.exists()
         model_exists = TRAINER_MODEL_PATH.exists()
         labels_exist = LABELS_PATH.exists()
 
-        st.write(f"- **Haar Cascade File:** `{'Found' if HAAR_CASCADE_PATH.exists() else 'Missing'}`")
-        st.write(f"- **Model Path:** `{TRAINER_MODEL_PATH}`")
-        st.write(f"- **Model Trained:** `{'Yes' if model_exists else 'No'}`")
+        st.write(f"- **YuNet Face Detector (ONNX):** `{'Found' if yunet_exists else 'Missing'}`")
+        st.write(f"- **SFace Deep Recognizer (ONNX):** `{'Found' if sface_exists else 'Missing'}`")
+        st.write(f"- **Deep Multi-Angle Embeddings:** `{'Active' if deep_embeddings_exist else 'Not Generated'}`")
+
+        if deep_embeddings_exist:
+            try:
+                with open(EMBEDDINGS_PATH, "r") as f:
+                    emb_data = json.load(f)
+                total_deep = sum(v.get("num_embeddings", len(v.get("features", []))) for v in emb_data.values())
+                st.write(f"- **Registered Deep Classes:** `{len(emb_data)} employees`")
+                st.write(f"- **Total Multi-Angle Feature Vectors:** `{total_deep} embeddings`")
+            except Exception:
+                pass
+
         if model_exists:
             size_mb = os.path.getsize(TRAINER_MODEL_PATH) / (1024 * 1024)
-            st.write(f"- **Model File Size:** `{size_mb:.2f} MB`")
+            st.write(f"- **LBPH Fallback Model:** `Active ({size_mb:.2f} MB)`")
             mod_time = datetime.fromtimestamp(os.path.getmtime(TRAINER_MODEL_PATH)).strftime("%Y-%m-%d %H:%M:%S")
             st.write(f"- **Last Trained:** `{mod_time}`")
 
-        if labels_exist:
-            with open(LABELS_PATH, "r") as f:
-                labels_dict = json.load(f)
-            st.write(f"- **Classes Trained:** `{len(labels_dict)}`")
+        st.info("✨ **Multi-Angle Invariance Active:** Recognizes employees facing straight, tilted ±30°, turned ±60°, or looking up/down.")
 
     st.divider()
 

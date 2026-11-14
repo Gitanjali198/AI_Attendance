@@ -1,7 +1,8 @@
 """
-Real-time Face Recognition Kiosk for AI Attendance System.
-Uses OpenCV LBPH face recognizer to identify employees and record Check-In / Check-Out attendance.
-Includes interactive HUD, keyboard mode toggling ('m'), and single-frame recognition API for Streamlit.
+Real-time Face Recognition Kiosk & Frame Inference for AI Attendance System.
+Powered by Deep SFace (Angle-Invariant MobileFaceNet) + YuNet (5-Point Landmark Face Detector)
+with automatic fallback to classical OpenCV LBPH.
+Identifies employees from ANY viewing angle (frontal, tilted, turned, up, down) and records Check-In / Check-Out.
 """
 import os
 import sys
@@ -18,12 +19,17 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from backend.config import (
-    HAAR_CASCADE_PATH, TRAINER_MODEL_PATH, LABELS_PATH,
-    DEFAULT_CONFIDENCE_THRESHOLD, FACE_IMAGE_SIZE, DEFAULT_CAMERA_INDEX
+    HAAR_CASCADE_PATH, TRAINER_MODEL_PATH, LABELS_PATH, EMBEDDINGS_PATH,
+    DEFAULT_CONFIDENCE_THRESHOLD, FACE_IMAGE_SIZE, DEFAULT_CAMERA_INDEX,
+    SFACE_MATCH_THRESHOLD, YUNET_SCORE_THRESHOLD
 )
 import backend.config as cfg
 MIN_CONFIDENCE_PERCENT = getattr(cfg, "MIN_CONFIDENCE_PERCENT", 58)
 from backend.attendance import mark_attendance
+from recognition.sface_engine import (
+    detect_faces, align_and_extract_feature, load_embeddings,
+    match_face_embedding, ensure_models_downloaded
+)
 
 def play_chime(frequency=1400, duration=150):
     """Plays a pleasant non-blocking audio beep on Windows."""
@@ -35,9 +41,9 @@ def play_chime(frequency=1400, duration=150):
             pass
     threading.Thread(target=_beep, daemon=True).start()
 
-def load_recognition_engine():
+def load_lbph_engine():
     """
-    Loads Haar cascade, LBPH recognizer, and labels mapping.
+    Fallback: Loads Haar cascade, LBPH recognizer, and labels mapping.
     Returns (detector, recognizer, labels) or raises error.
     """
     if not HAAR_CASCADE_PATH.exists():
@@ -68,69 +74,110 @@ def load_recognition_engine():
 def predict_single_frame(frame, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, min_confidence_percent=MIN_CONFIDENCE_PERCENT, **kwargs):
     """
     Processes a single frame (numpy array RGB or BGR).
-    Detects faces, runs prediction, and returns:
+    Uses Deep SFace + YuNet as primary high-accuracy, angle-invariant recognition engine.
+    Falls back gracefully to Haar Cascade + LBPH if models are uninitialized.
+    Returns:
     [
         {
             "box": (x, y, w, h),
+            "landmarks": [(x,y), ...],
             "label_id": int,
             "raw_name": str,
             "employee_id": str,
             "employee_name": str,
             "confidence_distance": float,
             "confidence_percent": int,
-            "is_recognized": bool
+            "is_recognized": bool,
+            "engine": str
         }, ...
     ]
     """
-    # Fallback if passed through kwargs or positional
-    if "min_confidence_percent" in kwargs:
-        min_confidence_percent = kwargs["min_confidence_percent"]
-    elif "min_confidence" in kwargs:
-        min_confidence_percent = kwargs["min_confidence"]
+    if frame is None or frame.size == 0:
+        return []
 
-    detector, recognizer, labels = load_recognition_engine()
-
-    if len(frame.shape) == 3 and frame.shape[2] == 3:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = frame
-
-    faces = detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
+    # Check for Deep SFace Embeddings
+    embeddings_db = load_embeddings()
     results = []
 
-    for (x, y, w, h) in faces:
-        face = gray[y:y+h, x:x+w]
-        face_resized = cv2.resize(face, FACE_IMAGE_SIZE)
+    # 1. PRIMARY ENGINE: Deep SFace + YuNet Multi-Angle AI
+    if embeddings_db:
+        try:
+            has_faces, detected_faces = detect_faces(frame, score_threshold=YUNET_SCORE_THRESHOLD)
+            if has_faces and len(detected_faces) > 0:
+                for face_info in detected_faces:
+                    raw_face = face_info["raw_face"]
+                    box = face_info["box"]
+                    landmarks = face_info["landmarks"]
 
-        label_id, distance = recognizer.predict(face_resized)
+                    query_feat = align_and_extract_feature(frame, raw_face)
+                    match_res = match_face_embedding(query_feat, embeddings_db, threshold=SFACE_MATCH_THRESHOLD)
 
-        # Distance <= 45 and confidence >= 58% denotes a genuine match (0 is perfect)
-        confidence_percent = max(0, min(100, round(100 * (1 - distance / 100))))
-        is_recognized = (
-            distance <= confidence_threshold
-            and confidence_percent >= min_confidence_percent
-            and str(label_id) in labels
-        )
+                    results.append({
+                        "box": box,
+                        "landmarks": landmarks,
+                        "label_id": -1,
+                        "raw_name": match_res["raw_name"],
+                        "employee_id": match_res["employee_id"],
+                        "employee_name": match_res["employee_name"],
+                        "confidence_distance": round(1.0 - match_res["cosine_similarity"], 3),
+                        "cosine_similarity": match_res["cosine_similarity"],
+                        "confidence_percent": match_res["confidence_percent"],
+                        "is_recognized": match_res["is_recognized"],
+                        "engine": "Deep SFace AI (Angle-Invariant)"
+                    })
 
-        raw_name = labels.get(str(label_id), "Unknown") if is_recognized else "Unknown"
+                return results
+        except Exception as e:
+            print(f"[Recognition Engine] Deep SFace failed, falling back to LBPH: {e}")
 
-        if is_recognized and "_" in raw_name:
-            emp_id, emp_name = raw_name.split("_", 1)
-        elif is_recognized:
-            emp_id, emp_name = raw_name, raw_name
+    # 2. FALLBACK ENGINE: Classical Haar Cascade + LBPH
+    try:
+        detector, recognizer, labels = load_lbph_engine()
+
+        if len(frame.shape) == 3 and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
-            emp_id, emp_name = "N/A", "Unknown"
+            gray = frame
 
-        results.append({
-            "box": (x, y, w, h),
-            "label_id": label_id,
-            "raw_name": raw_name,
-            "employee_id": emp_id,
-            "employee_name": emp_name,
-            "confidence_distance": round(distance, 1),
-            "confidence_percent": confidence_percent,
-            "is_recognized": is_recognized
-        })
+        faces = detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
+
+        for (x, y, w, h) in faces:
+            face = gray[y:y+h, x:x+w]
+            face_resized = cv2.resize(face, FACE_IMAGE_SIZE)
+
+            label_id, distance = recognizer.predict(face_resized)
+
+            confidence_percent = max(0, min(100, round(100 * (1 - distance / 100))))
+            is_recognized = (
+                distance <= confidence_threshold
+                and confidence_percent >= min_confidence_percent
+                and str(label_id) in labels
+            )
+
+            raw_name = labels.get(str(label_id), "Unknown") if is_recognized else "Unknown"
+
+            if is_recognized and "_" in raw_name:
+                emp_id, emp_name = raw_name.split("_", 1)
+            elif is_recognized:
+                emp_id, emp_name = raw_name, raw_name
+            else:
+                emp_id, emp_name = "N/A", "Unknown"
+
+            results.append({
+                "box": (x, y, w, h),
+                "landmarks": [],
+                "label_id": label_id,
+                "raw_name": raw_name,
+                "employee_id": emp_id,
+                "employee_name": emp_name,
+                "confidence_distance": round(distance, 1),
+                "confidence_percent": confidence_percent,
+                "is_recognized": is_recognized,
+                "engine": "Classical LBPH"
+            })
+
+    except Exception as e:
+        print(f"[Recognition Engine Error] {e}")
 
     return results
 
@@ -138,16 +185,15 @@ def run_face_kiosk(initial_mode="checkin", camera_index=DEFAULT_CAMERA_INDEX, co
     """
     Launches an interactive OpenCV live camera kiosk with real-time HUD.
     Features:
+    - Deep Multi-Angle SFace AI face tracking & 5 facial landmarks overlay
     - Press 'm' to toggle mode (Check-In <-> Check-Out)
+    - Press 'c' to clear cooldown cache
     - Press 'q' or [ESC] to exit
-    - Cooldown period to avoid spamming database
-    - Visual alerts and sound feedback
+    - Cooldown period to avoid duplicate check-ins
+    - Audio chime feedback on successful verification
     """
-    try:
-        detector, recognizer, labels = load_recognition_engine()
-    except Exception as e:
-        print(f"[Error] {e}")
-        return
+    embeddings_db = load_embeddings()
+    use_deep_ai = len(embeddings_db) > 0
 
     camera = cv2.VideoCapture(camera_index)
     if not camera.isOpened():
@@ -164,6 +210,10 @@ def run_face_kiosk(initial_mode="checkin", camera_index=DEFAULT_CAMERA_INDEX, co
 
     print("\n=======================================================")
     print("   AI Attendance Live Kiosk - Camera Running")
+    if use_deep_ai:
+        print("   ENGINE: Deep SFace Multi-Angle AI (Angle & Pose Invariant)")
+    else:
+        print("   ENGINE: Classical LBPH Recognizer (Train model for Deep AI)")
     print("=======================================================")
     print("   Controls:")
     print("   [m] : Switch Mode (Check-In <-> Check-Out)")
@@ -178,39 +228,37 @@ def run_face_kiosk(initial_mode="checkin", camera_index=DEFAULT_CAMERA_INDEX, co
 
         frame = cv2.flip(frame, 1)
         h_frame, w_frame = frame.shape[:2]
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = detector.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
-
-        # Top HUD Bar
+        # Top HUD Header Bar
         cv2.rectangle(frame, (0, 0), (w_frame, 55), (20, 20, 20), -1)
         mode_text = f"MODE: {mode.upper()}"
         mode_color = (0, 255, 128) if mode == "checkin" else (0, 165, 255)
-        cv2.putText(frame, "AI ATTENDANCE KIOSK", (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(frame, mode_text, (w_frame - 240, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
+        engine_tag = "DEEP MULTI-ANGLE AI" if use_deep_ai else "CLASSICAL LBPH"
+        cv2.putText(frame, f"AI ATTENDANCE KIOSK [{engine_tag}]", (20, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+        cv2.putText(frame, mode_text, (w_frame - 230, 36), cv2.FONT_HERSHEY_SIMPLEX, 0.7, mode_color, 2)
 
         current_time = time.time()
+        predictions = predict_single_frame(frame, confidence_threshold=confidence_threshold)
 
-        for (x, y, w, h) in faces:
-            face = gray[y:y+h, x:x+w]
-            face_resized = cv2.resize(face, FACE_IMAGE_SIZE)
+        for item in predictions:
+            x, y, w, h = item["box"]
+            is_match = item["is_recognized"]
+            emp_name = item["employee_name"]
+            raw_name = item["raw_name"]
+            conf_pct = item["confidence_percent"]
+            landmarks = item.get("landmarks", [])
 
-            label_id, distance = recognizer.predict(face_resized)
-            confidence_percent = max(0, min(100, round(100 * (1 - distance / 100))))
-            is_match = (
-                distance <= confidence_threshold
-                and confidence_percent >= MIN_CONFIDENCE_PERCENT
-                and str(label_id) in labels
-            )
+            # Draw 5 facial landmark dots if available (eyes, nose, mouth corners)
+            if landmarks:
+                for (lx, ly) in landmarks:
+                    cv2.circle(frame, (int(lx), int(ly)), 3, (0, 255, 255), -1)
 
             if is_match:
-                raw_name = labels[str(label_id)]
                 box_color = (0, 255, 0)
 
                 # Check cooldown
                 last_time = processed_cooldowns.get(raw_name, 0)
                 if current_time - last_time > COOLDOWN_SECONDS:
-                    # Mark attendance in database
                     result = mark_attendance(raw_name, mode=mode)
                     processed_cooldowns[raw_name] = current_time
 
@@ -240,60 +288,49 @@ def run_face_kiosk(initial_mode="checkin", camera_index=DEFAULT_CAMERA_INDEX, co
 
                 # Draw bounding box and label
                 cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
-                # Header label tag
                 tag_y = y - 10 if y - 10 > 25 else y + h + 25
-                cv2.rectangle(frame, (x, tag_y - 20), (x + 180, tag_y + 4), (20, 20, 20), -1)
-                display_name = raw_name.split("_", 1)[1] if "_" in raw_name else raw_name
-                cv2.putText(frame, f"{display_name} ({confidence_percent}%)", (x + 5, tag_y - 5),
+                cv2.rectangle(frame, (x, tag_y - 20), (x + 210, tag_y + 4), (20, 20, 20), -1)
+                cv2.putText(frame, f"{emp_name} ({conf_pct}%)", (x + 5, tag_y - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
 
             else:
-                # Unknown Face
                 box_color = (0, 0, 255)
                 cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
-                cv2.putText(frame, "Unknown Face", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
+                tag_y = y - 10 if y - 10 > 25 else y + h + 25
+                cv2.rectangle(frame, (x, tag_y - 20), (x + 190, tag_y + 4), (20, 20, 20), -1)
+                cv2.putText(frame, f"Unknown ({conf_pct}%)", (x + 5, tag_y - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
-        # Bottom status banner (if within 5 seconds of an event)
-        if last_status_banner and (current_time - banner_time < 5.0):
-            cv2.rectangle(frame, (0, h_frame - 45), (w_frame, h_frame), (15, 15, 15), -1)
-            cv2.putText(frame, last_status_banner, (20, h_frame - 15),
+        # Bottom HUD Notification Banner
+        if current_time - banner_time < 4.0 and last_status_banner:
+            cv2.rectangle(frame, (0, h_frame - 45), (w_frame, h_frame), (25, 25, 25), -1)
+            cv2.putText(frame, last_status_banner, (25, h_frame - 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, banner_color, 2)
-        else:
-            # Bottom help instructions
-            cv2.rectangle(frame, (0, h_frame - 30), (w_frame, h_frame), (30, 30, 30), -1)
-            cv2.putText(frame, "Press 'm' to switch mode | 'q' or ESC to exit", (20, h_frame - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
-        cv2.imshow("AI Attendance System - Face Kiosk", frame)
+        cv2.imshow("AI Attendance Kiosk (Deep Multi-Angle Recognition)", frame)
 
         key = cv2.waitKey(1) & 0xFF
-        if key in [27, ord('q'), ord('Q')]:
+        if key == ord('q') or key == 27:
             break
-        elif key in [ord('m'), ord('M')]:
+        elif key == ord('m'):
             mode = "checkout" if mode == "checkin" else "checkin"
             last_status_banner = f"Switched mode to {mode.upper()}"
             banner_color = (255, 255, 0)
-            banner_time = time.time()
-            play_chime(1000, 80)
-        elif key in [ord('c'), ord('C')]:
+            banner_time = current_time
+        elif key == ord('c'):
             processed_cooldowns.clear()
-            last_status_banner = "Cooldown cache cleared."
+            last_status_banner = "Cooldowns cleared"
             banner_color = (255, 255, 255)
-            banner_time = time.time()
+            banner_time = current_time
 
     camera.release()
     cv2.destroyAllWindows()
-    print("\n[AI Kiosk] Stopped.")
 
 if __name__ == "__main__":
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    import argparse
+    parser = argparse.ArgumentParser(description="AI Face Attendance Kiosk")
+    parser.add_argument("--mode", choices=["checkin", "checkout"], default="checkin", help="Initial mode")
+    parser.add_argument("--camera", type=int, default=DEFAULT_CAMERA_INDEX, help="Camera index")
+    args = parser.parse_args()
 
-    print("\n==========================================")
-    print("   AI Attendance System - Live Kiosk")
-    print("==========================================")
-    print("1. Check In Mode")
-    print("2. Check Out Mode")
-    choice = input("\nSelect Initial Mode (1/2, default 1): ").strip()
-    initial_mode = "checkout" if choice == "2" else "checkin"
-    run_face_kiosk(initial_mode=initial_mode)
+    run_face_kiosk(initial_mode=args.mode, camera_index=args.camera)
